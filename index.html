@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dead Hang Uptime</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* NetBird brand (orange values taken from the official logo SVG) */
+    --nb-orange: #f68330;
+    --nb-orange-deep: #f35e32;
+    --nb-text: #f2f2f2;
+
+    --bg: #121316;
+    --panel: #1a1c20;
+    --panel-2: #212328;
+    --border: #2b2e34;
+    --muted: #8f96a1;
+    --faint: #5c636e;
+    --online: #3ecf8e;
+    --danger: #ef5b5b;
+    --gold: #f6c343;
+    --silver: #c4cad3;
+    --bronze: #d08a5a;
+
+    --radius: 12px;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--nb-text);
+    font-family: var(--sans);
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+  }
+  #mesh {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    z-index: 0; pointer-events: none; opacity: .55;
+  }
+  .app {
+    position: relative; z-index: 1;
+    max-width: 1180px; margin: 0 auto;
+    height: 100vh; height: 100dvh;
+    display: flex; flex-direction: column;
+    padding: 20px 24px;
+    gap: 16px;
+  }
+
+  /* ---------- Header ---------- */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 16px; min-width: 0; }
+  .brand svg { height: 26px; width: auto; flex: none; }
+  .brand .sep { width: 1px; height: 30px; background: var(--border); }
+  .brand h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+  .brand p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; }
+  .stat {
+    background: color-mix(in srgb, var(--panel) 85%, transparent);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 14px; min-width: 110px;
+    backdrop-filter: blur(6px);
+  }
+  .stat .k { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .stat .v { font-family: var(--mono); font-size: 18px; font-weight: 700; margin-top: 2px; white-space: nowrap; }
+  .stat .v small { font-family: var(--sans); font-size: 12px; color: var(--muted); font-weight: 500; margin-left: 6px; }
+  .stat.record .v { color: var(--nb-orange); }
+
+  /* ---------- Panels ---------- */
+  main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; }
+  .panel {
+    background: color-mix(in srgb, var(--panel) 90%, transparent);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex; flex-direction: column; min-height: 0;
+    backdrop-filter: blur(8px);
+  }
+  .panel.board-panel { flex: 1 1 auto; }
+  /* Waiting room: grows with its content up to 1/3 of the area, then scrolls.
+     The leaderboard always gets the remaining space (at least 2/3). */
+  .panel.waiting-panel {
+    flex: 0 0 auto;
+    max-height: calc((100% - 16px) / 3);
+    min-height: min(220px, calc((100% - 16px) / 3));
+  }
+  .panel-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
+  }
+  .panel-head h2 {
+    margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .board-panel .panel-head h2 { color: var(--nb-text); font-size: 14px; }
+  .board-panel .panel-head h2 svg { width: 16px; height: 16px; color: var(--nb-orange); }
+  .count {
+    font-family: var(--mono); color: var(--nb-text); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; font-size: 12px;
+    letter-spacing: 0;
+  }
+  .hint { color: var(--faint); font-size: 12px; font-family: var(--mono); }
+  .scroll { overflow-y: auto; flex: 1; min-height: 0; }
+
+  /* ---------- Buttons ---------- */
+  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid transparent; }
+  .btn-primary {
+    background: var(--nb-orange); color: #1a0d03; font-weight: 600;
+    padding: 9px 16px; white-space: nowrap;
+    transition: background .15s, transform .05s;
+  }
+  .btn-primary:hover { background: #ff9445; }
+  .btn-primary:active { transform: translateY(1px); }
+  .btn-ghost {
+    background: transparent; color: var(--muted); border-color: var(--border);
+    padding: 7px 12px; font-size: 13px;
+  }
+  .btn-ghost:hover { color: var(--nb-text); border-color: var(--faint); }
+  .btn-icon {
+    background: transparent; color: var(--faint); border: none;
+    width: 30px; height: 30px; display: grid; place-items: center; padding: 0; flex: none;
+  }
+  .btn-icon:hover { color: var(--danger); background: var(--bg); }
+  .btn-icon svg { width: 16px; height: 16px; }
+  .toggle { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+  .toggle svg { width: 13px; height: 13px; }
+  .btn-sm { padding: 6px 12px; font-size: 13px; }
+
+  /* ---------- Leaderboard ---------- */
+  .board { list-style: none; margin: 0; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .row {
+    position: relative; overflow: hidden;
+    display: grid; grid-template-columns: 40px minmax(0, 1fr) auto auto; align-items: center;
+    gap: 16px; padding: 12px 14px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+    transition: border-color .2s, box-shadow .2s, background .2s;
+  }
+  .rank {
+    font-family: var(--mono); font-weight: 700; font-size: 15px;
+    width: 38px; height: 38px; border-radius: 9px;
+    display: grid; place-items: center;
+    background: var(--bg); color: var(--muted); border: 1px solid var(--border);
+  }
+  .row.r1 { border-color: color-mix(in srgb, var(--gold) 50%, transparent); background: color-mix(in srgb, var(--gold) 7%, var(--panel-2)); padding: 16px 14px; }
+  .row.r1 .rank { color: #1a1403; background: var(--gold); border-color: var(--gold); }
+  .row.r2 .rank { color: #15171a; background: var(--silver); border-color: var(--silver); }
+  .row.r3 .rank { color: #1a0f07; background: var(--bronze); border-color: var(--bronze); }
+
+  .row.running {
+    border-color: color-mix(in srgb, var(--nb-orange) 70%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--nb-orange) 30%, transparent), 0 8px 30px -12px color-mix(in srgb, var(--nb-orange) 55%, transparent);
+  }
+  /* packet stream along the bottom edge while connected */
+  .row.running::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+    background: repeating-linear-gradient(90deg, var(--nb-orange) 0 10px, transparent 10px 26px);
+    background-size: 26px 2px;
+    animation: packets .6s linear infinite;
+  }
+  @keyframes packets { to { background-position: 26px 0; } }
+  .row.joined { animation: join .5s cubic-bezier(.2, .8, .2, 1); }
+  @keyframes join { from { opacity: 0; transform: translateY(24px) scale(.98); } }
+
+  .who { min-width: 0; }
+  .name {
+    font-weight: 600; font-size: 17px;
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+  }
+  .name > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row.r1 .name { font-size: 20px; }
+  .btn-icon.btn-edit { width: 24px; height: 24px; opacity: 0; transition: opacity .15s; }
+  .btn-icon.btn-edit svg { width: 13px; height: 13px; }
+  .row:hover .btn-edit, .wait:hover .btn-edit, .btn-edit:focus-visible { opacity: 1; }
+  .btn-icon.btn-edit:hover { color: var(--nb-orange); }
+  @media (hover: none) { .btn-icon.btn-edit { opacity: 1; } }
+  .name-edit {
+    flex: 1; min-width: 0; max-width: 320px;
+    font: inherit; color: var(--nb-text); background: var(--bg);
+    border: 1px solid var(--nb-orange); border-radius: 6px; padding: 1px 6px; margin: -2px 0;
+    outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--nb-orange) 25%, transparent);
+  }
+  .name-edit.error { border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 25%, transparent); animation: shake .3s; }
+  .meta {
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .live {
+    flex: none; display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--sans); font-size: 10px; font-weight: 700; letter-spacing: .08em;
+    color: var(--online); border: 1px solid color-mix(in srgb, var(--online) 50%, transparent);
+    border-radius: 4px; padding: 1px 6px;
+  }
+  .live::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--online);
+    animation: blink 1.2s ease-in-out infinite;
+  }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  .times { text-align: right; }
+  .timer {
+    font-family: var(--mono); font-weight: 700; font-size: 26px;
+    font-variant-numeric: tabular-nums; letter-spacing: -.02em; line-height: 1.1;
+  }
+  .row.r1 .timer { font-size: 34px; color: var(--gold); }
+  .row.running .timer { color: var(--nb-text); }
+  .row .timer.pb { color: var(--nb-orange); }
+  .sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 3px; white-space: nowrap; }
+  .sub b { color: var(--nb-orange); font-weight: 500; }
+
+  .actions { display: flex; align-items: center; gap: 4px; }
+  .row .toggle { min-width: 124px; }
+  .row.running .toggle {
+    background: transparent; color: var(--nb-text);
+    border-color: color-mix(in srgb, var(--nb-orange) 70%, transparent);
+  }
+  .row.running .toggle:hover { background: color-mix(in srgb, var(--nb-orange) 15%, transparent); }
+  .row:not(.running) .toggle { background: var(--bg); color: var(--nb-text); border-color: var(--border); font-weight: 500; }
+  .row:not(.running) .toggle:hover { border-color: var(--nb-orange); color: var(--nb-orange); }
+
+  .empty {
+    color: var(--muted); text-align: center; padding: 36px 20px; font-size: 14px; line-height: 1.6;
+  }
+  .empty code { font-family: var(--mono); color: var(--nb-orange); font-size: 12.5px; }
+
+  /* ---------- Waiting room ---------- */
+  form.add { display: flex; gap: 8px; flex: 1; max-width: 460px; min-width: 240px; }
+  form.add input {
+    flex: 1; min-width: 0;
+    background: var(--bg); color: var(--nb-text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 12px; font: inherit; font-size: 14px;
+    outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  form.add input::placeholder { color: var(--faint); }
+  form.add input:focus { border-color: var(--nb-orange); box-shadow: 0 0 0 3px color-mix(in srgb, var(--nb-orange) 25%, transparent); }
+  form.add input.error { border-color: var(--danger); animation: shake .3s; }
+  @keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+  .form-msg { color: var(--danger); font-size: 12px; padding: 0 18px; height: 0; overflow: hidden; transition: height .15s; flex: none; }
+  .form-msg.show { height: 22px; padding-top: 4px; }
+
+  .waiting {
+    list-style: none; margin: 0; padding: 10px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .wait {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 8px 8px 14px; border-radius: 10px;
+    background: var(--panel-2); border: 1px dashed var(--border);
+  }
+  .wait .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .wait .who { flex: 1; }
+  .wait .name { font-size: 14px; }
+  .wait .who { display: flex; align-items: baseline; gap: 12px; }
+  .wait .meta { font-size: 11px; margin-top: 0; }
+  .waiting .empty { padding: 18px; }
+
+  footer {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+    color: var(--faint); font-size: 12px; font-family: var(--mono);
+  }
+
+  @media (max-width: 760px) {
+    .app { padding: 16px; height: auto; min-height: 100vh; }
+    .scroll { overflow: visible; }
+    .panel.waiting-panel { max-height: none; min-height: 0; }
+    .wait .who { display: block; }
+    .stats { width: 100%; }
+    .stat { flex: 1; min-width: 0; }
+    .row { grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; padding: 12px; }
+    .rank { width: 32px; height: 32px; font-size: 13px; }
+    .row .times { grid-column: 3; grid-row: 1; }
+    .row .actions { grid-column: 1 / -1; grid-row: 2; }
+    .row .toggle { flex: 1; }
+    .timer { font-size: 21px; }
+    .row.r1 .timer { font-size: 26px; }
+    .row.r1 .name { font-size: 17px; }
+    form.add { max-width: none; }
+  }
+  @media (max-width: 520px) {
+    .brand { flex-direction: column; align-items: flex-start; gap: 10px; }
+    .brand .sep { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<canvas id="mesh" aria-hidden="true"></canvas>
+
+<div class="app">
+  <header>
+    <div class="brand">
+      <svg class="logo-full" viewBox="0 0 133 23" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="NetBird">
+        <path d="M46.9438 7.5013C48.1229 8.64688 48.7082 10.3025 48.7082 12.4683V21.6663H46.1411V12.8362C46.1411 11.2809 45.7481 10.0851 44.9704 9.26566C44.1928 8.43783 43.1308 8.0281 41.7846 8.0281C40.4383 8.0281 39.3345 8.45455 38.5234 9.30747C37.7123 10.1604 37.3109 11.4063 37.3109 13.0369V21.6663H34.7188V6.06305H37.3109V8.28732C37.821 7.49294 38.5234 6.87416 39.4014 6.43934C40.2878 6.00452 41.2578 5.78711 42.3197 5.78711C44.2179 5.78711 45.7565 6.36408 46.9355 7.50966L46.9438 7.5013Z" fill="#F2F2F2"/>
+        <path d="M67.1048 14.8344H54.6288C54.7208 16.373 55.2476 17.5771 56.2092 18.4384C57.1708 19.2997 58.3331 19.7345 59.6961 19.7345C60.8166 19.7345 61.7531 19.4753 62.4973 18.9485C63.2499 18.4301 63.7767 17.7277 64.0777 16.858H66.8706C66.4525 18.3548 65.6163 19.5756 64.3621 20.5205C63.1078 21.4571 61.5525 21.9337 59.6878 21.9337C58.2077 21.9337 56.8865 21.5992 55.7159 20.9386C54.5452 20.278 53.6337 19.3331 52.9648 18.1039C52.2958 16.8831 51.9697 15.4616 51.9697 13.8477C51.9697 12.2339 52.2958 10.8207 52.9397 9.60825C53.5836 8.39578 54.495 7.45924 55.6573 6.80702C56.828 6.15479 58.1659 5.82031 59.6878 5.82031C61.2096 5.82031 62.4806 6.14643 63.6178 6.79029C64.7551 7.43416 65.6331 8.32052 66.2518 9.44938C66.8706 10.5782 67.18 11.8576 67.18 13.2791C67.18 13.7725 67.1549 14.2909 67.0964 14.8428L67.1048 14.8344ZM63.8603 10.1769C63.4255 9.4661 62.8318 8.92258 62.0793 8.55465C61.3267 8.18673 60.4989 8.00277 59.5874 8.00277C58.2746 8.00277 57.1625 8.42086 56.2427 9.25705C55.3228 10.0932 54.796 11.2472 54.6623 12.7356H64.5126C64.5126 11.7489 64.2952 10.896 63.8603 10.1852V10.1769Z" fill="#F2F2F2"/>
+        <path d="M73.7695 8.20355V17.4016C73.7695 18.1626 73.9284 18.6977 74.2545 19.0071C74.5806 19.3165 75.1409 19.4754 75.9352 19.4754H77.8418V21.6662H75.5088C74.0622 21.6662 72.9835 21.3317 72.2644 20.6711C71.5452 20.0105 71.1857 18.9151 71.1857 17.3933V8.19519H69.1621V6.0629H71.1857V2.13281H73.7779V6.0629H77.8501V8.19519H73.7779L73.7695 8.20355Z" fill="#F2F2F2"/>
+        <path d="M85.9022 6.68902C86.9307 6.10369 88.093 5.80266 89.4058 5.80266C90.8106 5.80266 92.0732 6.13714 93.1937 6.79773C94.3142 7.46668 95.2006 8.39485 95.8444 9.59896C96.4883 10.8031 96.8144 12.2079 96.8144 13.7966C96.8144 15.3854 96.4883 16.7818 95.8444 18.011C95.2006 19.2486 94.3142 20.2018 93.1854 20.8875C92.0565 21.5732 90.7939 21.916 89.4141 21.916C88.0344 21.916 86.8805 21.6234 85.8687 21.0297C84.8569 20.4443 84.0876 19.6918 83.5775 18.7803V21.6568H80.9854V0.601562H83.5775V8.97182C84.1127 8.04365 84.8904 7.28272 85.9105 6.69738L85.9022 6.68902ZM93.4529 10.7362C92.9763 9.86654 92.3408 9.19759 91.5297 8.74605C90.7186 8.29451 89.8322 8.06037 88.8706 8.06037C87.909 8.06037 87.0394 8.29451 86.2366 8.75441C85.4255 9.22268 84.7817 9.89163 84.2967 10.778C83.8117 11.6643 83.5692 12.6845 83.5692 13.8384C83.5692 14.9924 83.8117 16.046 84.2967 16.9323C84.7817 17.8187 85.4255 18.4877 86.2366 18.9559C87.0394 19.4242 87.9174 19.65 88.8706 19.65C89.8239 19.65 90.727 19.4158 91.5297 18.9559C92.3324 18.4877 92.9763 17.8187 93.4529 16.9323C93.9296 16.046 94.1637 15.0091 94.1637 13.8134C94.1637 12.6176 93.9296 11.6142 93.4529 10.7362Z" fill="#F2F2F2"/>
+        <path d="M100.318 3.01864C99.9749 2.67581 99.8076 2.25771 99.8076 1.76436C99.8076 1.27101 99.9749 0.852913 100.318 0.510076C100.661 0.167238 101.079 0 101.572 0C102.065 0 102.45 0.167238 102.784 0.510076C103.119 0.852913 103.286 1.27101 103.286 1.76436C103.286 2.25771 103.119 2.67581 102.784 3.01864C102.45 3.36148 102.049 3.52872 101.572 3.52872C101.095 3.52872 100.661 3.36148 100.318 3.01864ZM102.826 6.06237V21.6657H100.234V6.06237H102.826Z" fill="#F2F2F2"/>
+        <path d="M111.773 6.52155C112.617 6.0282 113.646 5.77734 114.867 5.77734V8.45315H114.181C111.28 8.45315 109.825 10.0252 109.825 13.1776V21.6649H107.232V6.06165H109.825V8.5953C110.276 7.70058 110.928 7.00654 111.773 6.51319V6.52155Z" fill="#F2F2F2"/>
+        <path d="M117.861 9.60732C118.505 8.40321 119.391 7.46668 120.52 6.80609C121.649 6.1455 122.92 5.81102 124.325 5.81102C125.537 5.81102 126.666 6.09533 127.711 6.64721C128.757 7.20746 129.551 7.94331 130.103 8.85475V0.601562H132.72V21.6735H130.103V18.7385C129.593 19.6667 128.832 20.436 127.828 21.0297C126.825 21.6317 125.646 21.9244 124.3 21.9244C122.953 21.9244 121.657 21.5816 120.528 20.8959C119.4 20.2102 118.513 19.257 117.869 18.0194C117.226 16.7818 116.899 15.377 116.899 13.805C116.899 12.233 117.226 10.8114 117.869 9.60732H117.861ZM129.392 10.7613C128.915 9.89163 128.28 9.22268 127.469 8.75441C126.658 8.28614 125.771 8.06037 124.81 8.06037C123.848 8.06037 122.962 8.28614 122.159 8.74605C121.356 9.20595 120.729 9.86654 120.253 10.7362C119.776 11.6058 119.542 12.6343 119.542 13.8134C119.542 14.9924 119.776 16.046 120.253 16.9323C120.729 17.8187 121.365 18.4877 122.159 18.9559C122.953 19.4242 123.84 19.65 124.81 19.65C125.78 19.65 126.666 19.4158 127.469 18.9559C128.272 18.4877 128.915 17.8187 129.392 16.9323C129.869 16.046 130.103 15.0175 130.103 13.8384C130.103 12.6594 129.869 11.6393 129.392 10.7613Z" fill="#F2F2F2"/>
+        <path d="M21.4651 0.568359C17.8193 0.902835 16.0047 3.00167 15.3191 4.06363L4.66602 22.5183H17.5182L30.1949 0.568359H21.4651Z" fill="#F68330"/>
+        <path d="M17.5265 22.5187L0 3.9302C0 3.9302 19.8177 -1.39633 21.7493 15.2188L17.5265 22.5187Z" fill="#F68330"/>
+        <path d="M14.9255 4.75055L9.54883 14.0657L17.5177 22.5196L21.7405 15.2029C21.0715 9.49174 18.287 6.37276 14.9255 4.74219" fill="#F35E32"/>
+      </svg>
+      <span class="sep"></span>
+      <div>
+        <h1>Dead Hang Challenge</h1>
+        <p>Hold the connection. Longest uptime wins.</p>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Peers</div><div class="v" id="stat-peers">0</div></div>
+      <div class="stat"><div class="k">Connected</div><div class="v" id="stat-online">0</div></div>
+      <div class="stat record"><div class="k">Record uptime</div><div class="v" id="stat-record">--:--.--</div></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel board-panel" aria-label="Leaderboard">
+      <div class="panel-head">
+        <h2>
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 1.5h8v1.8h2.3v1.9a3 3 0 0 1-2.6 3A4 4 0 0 1 8.9 10.5v1.8h2.3v2.2H4.8v-2.2h2.3v-1.8A4 4 0 0 1 4.3 8.2a3 3 0 0 1-2.6-3V3.3H4zm8 3.3v2a1.3 1.3 0 0 0 .8-1.2v-.8zM4 4.8h-.8v.8A1.3 1.3 0 0 0 4 6.8z"/></svg>
+          Leaderboard <span class="count" id="board-count">0</span>
+        </h2>
+        <span class="hint">ranked by best uptime · live sessions climb in real time</span>
+      </div>
+      <div class="scroll"><ol class="board" id="board"></ol></div>
+    </section>
+
+    <section class="panel waiting-panel" aria-label="Waiting room">
+      <div class="panel-head">
+        <h2>Waiting room <span class="count" id="wait-count">0</span></h2>
+        <form class="add" id="add-form" autocomplete="off">
+          <input id="add-name" maxlength="40" placeholder="Add a peer — participant name" aria-label="Participant name">
+          <button class="btn-primary btn-sm" type="submit">+ Add peer</button>
+        </form>
+      </div>
+      <div class="form-msg" id="form-msg"></div>
+      <div class="scroll"><ul class="waiting" id="waiting"></ul></div>
+    </section>
+  </main>
+
+  <footer>
+    <span>Data stays in this browser (localStorage). No servers, no tunnels harmed.</span>
+    <span style="display:flex;gap:8px">
+      <button class="btn-ghost" id="export-btn" type="button">Export JSON</button>
+      <button class="btn-ghost" id="reset-btn" type="button">Reset network</button>
+    </span>
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const STORAGE_KEY = "netbird-deadhang-v1";
+  const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ---------- State ----------
+  // peer: { id, name, ip, attempts: [{ ms, at }], runningSince: number|null }
+  let state = load();
+
+  function load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      if (s && Array.isArray(s.peers)) return s;
+    } catch (_) {}
+    return { peers: [] };
+  }
+  function save() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) {}
+  }
+
+  // Keep multiple tabs/windows in sync.
+  window.addEventListener("storage", (e) => {
+    if (e.key === STORAGE_KEY) { state = load(); renderAll(); }
+  });
+
+  // ---------- Helpers ----------
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+  function fmt(ms) {
+    if (ms == null) return "--:--.--";
+    const cs = Math.floor(ms / 10) % 100;
+    const totalS = Math.floor(ms / 1000);
+    const s = totalS % 60;
+    const m = Math.floor(totalS / 60) % 60;
+    const h = Math.floor(totalS / 3600);
+    const p = (n) => String(n).padStart(2, "0");
+    return (h ? h + ":" + p(m) : p(m)) + ":" + p(s) + "." + p(cs);
+  }
+
+  function hostname(name) {
+    const slug = name.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "peer";
+    return slug + ".netbird.cloud";
+  }
+
+  // Random address in the CGNAT range NetBird uses (100.64.0.0/10), unique within this network.
+  function newIp() {
+    const used = new Set(state.peers.map((p) => p.ip));
+    for (let i = 0; i < 1000; i++) {
+      const ip = "100." + (64 + Math.floor(Math.random() * 64)) + "." + Math.floor(Math.random() * 256) + "." + (1 + Math.floor(Math.random() * 254));
+      if (!used.has(ip)) return ip;
+    }
+    return "100.64.0." + (state.peers.length + 1);
+  }
+
+  const find = (id) => state.peers.find((x) => x.id === id);
+  const best = (p) => p.attempts.reduce((m, a) => Math.max(m, a.ms), 0) || null;
+  const live = (p, now) => (p.runningSince ? now - p.runningSince : null);
+  const score = (p, now) => Math.max(best(p) || 0, live(p, now) || 0);
+  const onBoard = (p) => p.attempts.length > 0 || !!p.runningSince;
+
+  // Board order: highest score first; ties keep insertion order.
+  function ranked(now) {
+    return state.peers.filter(onBoard).sort((a, b) => score(b, now) - score(a, now));
+  }
+
+  // ---------- Actions ----------
+  let justJoined = null;
+
+  function addPeer(name) {
+    state.peers.push({ id: uid(), name, ip: newIp(), attempts: [], runningSince: null });
+    save(); renderAll();
+  }
+  function toggle(id) {
+    const p = find(id);
+    if (!p) return;
+    const now = Date.now();
+    if (p.runningSince) {
+      p.attempts.push({ ms: now - p.runningSince, at: now });
+      p.runningSince = null;
+    } else {
+      if (!onBoard(p)) justJoined = id;
+      p.runningSince = now;
+    }
+    save(); renderAll();
+  }
+  // Discard a running session (false start). A peer with no finished sessions returns to the waiting room.
+  function cancel(id) {
+    const p = find(id);
+    if (!p) return;
+    p.runningSince = null;
+    save(); renderAll();
+  }
+  function removePeer(id) {
+    const p = find(id);
+    if (!p) return;
+    const n = p.attempts.length;
+    if (!confirm(`Remove peer "${p.name}"${n ? ` and their ${n} session${n === 1 ? "" : "s"}` : ""}?`)) return;
+    state.peers = state.peers.filter((x) => x.id !== id);
+    save(); renderAll();
+  }
+
+  // ---------- Names ----------
+  const cleanName = (s) => s.trim().replace(/\s+/g, " ");
+  function nameError(name, exceptId) {
+    if (!name) return "Peer name can't be empty.";
+    if (state.peers.some((p) => p.id !== exceptId && p.name.toLowerCase() === name.toLowerCase())) return `"${name}" is already on the network.`;
+    return "";
+  }
+
+  // Inline rename. Updates the DOM in place (no full re-render), so a click on
+  // another row's button right after editing is not lost.
+  let editingId = null;
+  function startEdit(id) {
+    if (editingId) return;
+    const p = find(id);
+    const span = document.querySelector(`[data-id="${id}"] .name > span:first-child`);
+    if (!p || !span) return;
+    editingId = id;
+    const input = document.createElement("input");
+    input.className = "name-edit";
+    input.value = p.name;
+    input.maxLength = 40;
+    input.setAttribute("aria-label", "Peer name");
+    span.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const close = () => {
+      done = true;
+      editingId = null;
+      const s = document.createElement("span");
+      s.textContent = p.name;
+      input.replaceWith(s);
+      document.querySelectorAll(`[data-id="${id}"] .host`).forEach((el) => { el.textContent = hostname(p.name); });
+      renderStats();
+    };
+    const commit = (fromEnter) => {
+      if (done) return;
+      const name = cleanName(input.value);
+      if (name === p.name) return close();
+      const err = nameError(name, id);
+      if (err) {
+        if (!fromEnter) return close(); // clicked away with an invalid name: keep the old one
+        input.title = err;
+        input.classList.remove("error"); void input.offsetWidth; input.classList.add("error");
+        return;
+      }
+      p.name = name;
+      save();
+      close();
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); commit(true); }
+      else if (e.key === "Escape") { e.preventDefault(); if (!done) close(); }
+    });
+    input.addEventListener("input", () => { input.classList.remove("error"); input.title = ""; });
+    input.addEventListener("blur", () => commit(false));
+  }
+
+  // ---------- Rendering ----------
+  const ICON_PLAY = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5z"/></svg>';
+  const ICON_STOP = '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/></svg>';
+  const ICON_X = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+  const ICON_EDIT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2.5l2.5 2.5L5.5 13H3v-2.5z"/></svg>';
+  const editBtn = (id) => `<button class="btn-icon btn-edit" data-action="rename" data-id="${id}" title="Rename (or double-click the name)" aria-label="Rename peer">${ICON_EDIT}</button>`;
+  const ICON_TRASH = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/></svg>';
+
+  function rowHtml(p, i, now) {
+    const running = !!p.runningSince;
+    const b = best(p);
+    const n = p.attempts.length;
+    const last = n ? p.attempts[n - 1].ms : null;
+    const big = running ? live(p, now) : b;
+    const sub = running
+      ? (b ? `best <b>${fmt(b)}</b>` : "first session")
+      : (n > 1 ? `last ${fmt(last)}` : "best uptime");
+    return `
+      <li class="row${i < 3 ? " r" + (i + 1) : ""}${running ? " running" : ""}${p.id === justJoined ? " joined" : ""}" data-id="${p.id}">
+        <span class="rank">${i + 1}</span>
+        <div class="who">
+          <div class="name"><span>${esc(p.name)}</span>${editBtn(p.id)}${running ? '<span class="live">LIVE</span>' : ""}</div>
+          <div class="meta">${esc(p.ip)} · <span class="host">${esc(hostname(p.name))}</span> · ${n} ${n === 1 ? "session" : "sessions"}</div>
+        </div>
+        <div class="times">
+          <div class="timer" data-timer="${p.id}">${fmt(big)}</div>
+          <div class="sub">${sub}</div>
+        </div>
+        <div class="actions">
+          <button class="btn-primary toggle" data-action="toggle" data-id="${p.id}">${running ? ICON_STOP + "Disconnect" : ICON_PLAY + "Reconnect"}</button>
+          ${running
+            ? `<button class="btn-icon" data-action="cancel" data-id="${p.id}" title="Discard this session (false start)" aria-label="Discard session">${ICON_X}</button>`
+            : `<button class="btn-icon" data-action="remove" data-id="${p.id}" title="Remove peer" aria-label="Remove peer">${ICON_TRASH}</button>`}
+        </div>
+      </li>`;
+  }
+
+  function renderBoard() {
+    const now = Date.now();
+    const list = ranked(now);
+    $("board-count").textContent = list.length;
+    $("board").innerHTML = list.length
+      ? list.map((p, i) => rowHtml(p, i, now)).join("")
+      : `<li class="empty">No active tunnels yet.<br>Hit <code>Connect</code> on a peer in the waiting room when they start hanging.</li>`;
+    lastOrder = list.map((p) => p.id).join(",");
+    justJoined = null;
+  }
+
+  function renderWaiting() {
+    const waiting = state.peers.filter((p) => !onBoard(p));
+    $("wait-count").textContent = waiting.length;
+    $("waiting").innerHTML = waiting.length
+      ? waiting.map((p) => `
+        <li class="wait" data-id="${p.id}">
+          <span class="dot"></span>
+          <div class="who">
+            <div class="name"><span>${esc(p.name)}</span>${editBtn(p.id)}</div>
+            <div class="meta">${esc(p.ip)}</div>
+          </div>
+          <button class="btn-primary btn-sm toggle" data-action="toggle" data-id="${p.id}">${ICON_PLAY}Connect</button>
+          <button class="btn-icon" data-action="remove" data-id="${p.id}" title="Remove peer" aria-label="Remove peer">${ICON_TRASH}</button>
+        </li>`).join("")
+      : `<li class="empty">${state.peers.length ? "Everyone has joined the network." : "Nobody here yet. Add the first peer above."}</li>`;
+  }
+
+  function renderStats(now = Date.now()) {
+    $("stat-peers").textContent = state.peers.length;
+    $("stat-online").textContent = state.peers.filter((p) => p.runningSince).length;
+    const top = ranked(now)[0];
+    const html = top ? `${fmt(score(top, now))}<small>${esc(top.name)}</small>` : "--:--.--";
+    const el = $("stat-record");
+    if (el.innerHTML !== html) el.innerHTML = html;
+  }
+
+  function renderAll() { editingId = null; renderBoard(); renderWaiting(); renderStats(); }
+
+  // Reorder existing rows in place (FLIP animation) so buttons stay clickable while timers run.
+  let lastOrder = "";
+  function reorderBoard(ids) {
+    const board = $("board");
+    const before = new Map();
+    for (const li of board.children) before.set(li.dataset.id, li.getBoundingClientRect().top);
+    for (const id of ids) {
+      const li = board.querySelector(`[data-id="${id}"]`);
+      if (li) board.appendChild(li);
+    }
+    [...board.children].forEach((li, i) => {
+      li.querySelector(".rank").textContent = i + 1;
+      li.classList.toggle("r1", i === 0);
+      li.classList.toggle("r2", i === 1);
+      li.classList.toggle("r3", i === 2);
+      if (REDUCED) return;
+      const dy = before.get(li.dataset.id) - li.getBoundingClientRect().top;
+      if (dy) li.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 450, easing: "cubic-bezier(.2,.8,.2,1)" });
+    });
+  }
+
+  // Tick: update running timers every frame; check ranking ~5x/s.
+  let lastCheck = 0;
+  function tick(t) {
+    const now = Date.now();
+    let anyRunning = false;
+    for (const p of state.peers) {
+      if (!p.runningSince) continue;
+      anyRunning = true;
+      const el = document.querySelector(`[data-timer="${p.id}"]`);
+      if (el) {
+        const ms = now - p.runningSince;
+        el.textContent = fmt(ms);
+        const b = best(p);
+        el.classList.toggle("pb", !!b && ms > b);
+      }
+    }
+    if (anyRunning && t - lastCheck > 200) {
+      lastCheck = t;
+      const ids = ranked(now).map((p) => p.id);
+      const order = ids.join(",");
+      if (order !== lastOrder && !editingId) { reorderBoard(ids); lastOrder = order; }
+      renderStats(now);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // ---------- Events ----------
+  function onAction(e) {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    const { action, id } = btn.dataset;
+    if (action === "toggle") toggle(id);
+    else if (action === "cancel") cancel(id);
+    else if (action === "remove") removePeer(id);
+    else if (action === "rename") startEdit(id);
+  }
+  function onDblClick(e) {
+    const span = e.target.closest(".name > span:first-child");
+    const li = span && span.closest("[data-id]");
+    if (li) startEdit(li.dataset.id);
+  }
+  for (const el of [$("board"), $("waiting")]) {
+    el.addEventListener("click", onAction);
+    el.addEventListener("dblclick", onDblClick);
+  }
+
+  $("add-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = $("add-name");
+    const name = cleanName(input.value);
+    const msg = $("form-msg");
+    const err = nameError(name);
+    if (err) {
+      msg.textContent = err; msg.classList.add("show");
+      input.classList.remove("error"); void input.offsetWidth; input.classList.add("error");
+      return;
+    }
+    msg.classList.remove("show"); input.classList.remove("error");
+    addPeer(name);
+    input.value = "";
+    input.focus();
+  });
+  $("add-name").addEventListener("input", () => { $("form-msg").classList.remove("show"); $("add-name").classList.remove("error"); });
+
+  $("reset-btn").addEventListener("click", () => {
+    if (!state.peers.length) return;
+    if (!confirm("Reset the network? This deletes ALL peers and times.")) return;
+    state = { peers: [] };
+    save(); renderAll();
+  });
+
+  $("export-btn").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `deadhang-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  // ---------- Background mesh ----------
+  function mesh() {
+    const c = $("mesh"), ctx = c.getContext("2d");
+    let w, h, nodes = [];
+    const DPR = Math.min(window.devicePixelRatio || 1, 2);
+    function resize() {
+      w = c.clientWidth; h = c.clientHeight;
+      c.width = w * DPR; c.height = h * DPR; ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      const count = Math.round(Math.min(70, (w * h) / 22000));
+      nodes = Array.from({ length: count }, () => ({
+        x: Math.random() * w, y: Math.random() * h,
+        vx: (Math.random() - .5) * .25, vy: (Math.random() - .5) * .25,
+        hot: Math.random() < .12,
+      }));
+    }
+    function draw() {
+      ctx.clearRect(0, 0, w, h);
+      const LINK = 150;
+      for (let i = 0; i < nodes.length; i++) {
+        const a = nodes[i];
+        for (let j = i + 1; j < nodes.length; j++) {
+          const b = nodes[j], d = Math.hypot(a.x - b.x, a.y - b.y);
+          if (d < LINK) {
+            const alpha = (1 - d / LINK) * .35;
+            ctx.strokeStyle = (a.hot || b.hot) ? `rgba(246,131,48,${alpha})` : `rgba(140,150,165,${alpha * .6})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+          }
+        }
+      }
+      for (const n of nodes) {
+        ctx.fillStyle = n.hot ? "rgba(246,131,48,.9)" : "rgba(160,168,180,.5)";
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.hot ? 2.2 : 1.5, 0, Math.PI * 2); ctx.fill();
+        if (!REDUCED) {
+          n.x += n.vx; n.y += n.vy;
+          if (n.x < 0 || n.x > w) n.vx *= -1;
+          if (n.y < 0 || n.y > h) n.vy *= -1;
+        }
+      }
+      if (!REDUCED) requestAnimationFrame(draw);
+    }
+    window.addEventListener("resize", () => { resize(); if (REDUCED) draw(); });
+    resize(); draw();
+  }
+
+  renderAll();
+  requestAnimationFrame(tick);
+  mesh();
+})();
+</script>
+</body>
+</html>
